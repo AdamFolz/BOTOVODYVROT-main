@@ -108,7 +108,7 @@ python bot.py
 
 ## Безопасность и доступ
 
-- `ADMIN_USER_ID` обязателен для запуска: он защищает `/remember`, `/kbimport`, `/forget` и будущие memory-admin команды.
+- `ADMIN_USER_ID` необязателен для запуска бота: без него бот стартует нормально, но `/remember`, `/kbimport`, `/forget`, `/v2status` и будущие memory-admin команды отвечают, что админ не настроен, и остаются недоступны.
 - `ALLOWED_CHAT_IDS` можно оставить пустым для локального теста или заполнить через запятую, чтобы бот отвечал только в доверенных чатах.
 - `/delete_me CONFIRM` удаляет v1 SQLite-данные пользователя в текущем чате. V2 raw event log пока append-only; retention/delete policy вынесена в `ROADMAP.md`.
 

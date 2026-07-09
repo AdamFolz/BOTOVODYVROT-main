@@ -95,6 +95,15 @@ def is_admin(update: Update) -> bool:
     return bool(user and ADMIN_USER_ID and user.id == ADMIN_USER_ID)
 
 
+def admin_denied_message() -> str:
+    if ADMIN_USER_ID <= 0:
+        return (
+            "Эта команда доступна только админу, а ADMIN_USER_ID не настроен. "
+            "Задай его в .env, чтобы включить админ-команды."
+        )
+    return "Эта команда доступна только админу."
+
+
 def is_allowed_chat_id(chat_id: int) -> bool:
     return not ALLOWED_CHAT_IDS or int(chat_id) in ALLOWED_CHAT_IDS
 
@@ -332,7 +341,7 @@ async def forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await ensure_allowed_chat(update):
         return
     if not is_admin(update):
-        await safe_send(update, "Эта команда доступна только админу.")
+        await safe_send(update, admin_denied_message())
         return
     if not context.args or not context.args[0].isdigit():
         await safe_send(update, "Напиши так: /forget <manual_memory_id>")
@@ -356,7 +365,7 @@ async def v2status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await ensure_allowed_chat(update):
         return
     if not is_admin(update):
-        await safe_send(update, "Эта команда доступна только админу.")
+        await safe_send(update, admin_denied_message())
         return
     await safe_send(update, memory_manager.v2_status_text(chat_id_of(update)))
 
@@ -460,7 +469,7 @@ async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if not is_admin(update):
-        await safe_send(update, "Эта команда доступна только админу.")
+        await safe_send(update, admin_denied_message())
         return
 
     chat_id = chat_id_of(update)
@@ -833,7 +842,7 @@ async def kbimport(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await ensure_allowed_chat(update):
         return
     if not is_admin(update):
-        await safe_send(update, "Эта команда доступна только админу.")
+        await safe_send(update, admin_denied_message())
         return
     if not knowledge_base.exists():
         await safe_send(update, f"База знаний не найдена по пути: {knowledge_base.base_dir}")
@@ -1007,8 +1016,6 @@ def validate_env() -> None:
         missing.append("TELEGRAM_BOT_TOKEN")
     if not OPENAI_API_KEY:
         missing.append("OPENAI_API_KEY")
-    if ADMIN_USER_ID <= 0:
-        missing.append("ADMIN_USER_ID")
     if missing:
         raise RuntimeError(
             "Missing env variables: "
