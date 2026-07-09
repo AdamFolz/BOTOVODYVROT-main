@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.sqlite3
+*.sqlite3-*
+exports/*.jsonl
+
+predskazbot_v2.sqlite3*
