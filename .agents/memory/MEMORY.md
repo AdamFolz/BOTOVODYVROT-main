@@ -1,0 +1,1 @@
+- [PredskazBot setup](predskazbot-setup.md) — Telegram bot; env-var contract mismatch between .env.example and code validation, and required admin ID.
