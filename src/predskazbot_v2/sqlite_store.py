@@ -249,6 +249,7 @@ class SQLiteV2Store:
         mentions: list[str],
         telegram_message_id: int | None = None,
         telegram_thread_id: int | None = None,
+        reply_to_message_id: int | None = None,
         chat_title: str = "",
         chat_type: str = "telegram",
         created_at: str | None = None,
@@ -259,6 +260,11 @@ class SQLiteV2Store:
         member_id = self.ensure_member(telegram_user_id)
         self.ensure_membership(chat_id, member_id, username=username, display_name=display_name)
         event_id = str(uuid.uuid4())
+        reply_to_event_id = (
+            stable_uuid("message_event", telegram_chat_id, reply_to_message_id)
+            if reply_to_message_id is not None
+            else None
+        )
         event_hash = content_hash(f"{telegram_chat_id}:{telegram_message_id}:{telegram_user_id}:{event_created_at}:{text}")
         with self.connect() as conn:
             conn.execute(
@@ -268,7 +274,7 @@ class SQLiteV2Store:
                     reply_to_event_id, text, mentions_json, content_hash, created_at,
                     edited_at, deleted_at, ingested_at, raw_payload_json
                 )
-                VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
                 """,
                 (
                     event_id,
@@ -276,12 +282,16 @@ class SQLiteV2Store:
                     member_id,
                     telegram_message_id,
                     telegram_thread_id,
+                    reply_to_event_id,
                     text,
                     json.dumps(mentions, ensure_ascii=False),
                     event_hash,
                     event_created_at,
                     now,
-                    json.dumps({"source": "telegram_runtime"}, ensure_ascii=False),
+                    json.dumps(
+                        {"source": "telegram_runtime", "reply_to_message_id": reply_to_message_id},
+                        ensure_ascii=False,
+                    ),
                 ),
             )
         return event_id

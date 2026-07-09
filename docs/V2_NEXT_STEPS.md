@@ -21,6 +21,8 @@
 5. `src/curation/` — LLM extraction в `memory_observations`, затем validation/scoring.
 6. `src/retrieval/` — выбор claims для `/profile`, `/lore`, `/summary`, `/future`.
 
+Текущий переходный режим допускает `V2_FULL_TRANSITION=1`, где prompt context уже строится из v2 seed/live и старый v1 memory curator пропускается. Это полезно для staged rollout, но не заменяет финальный repository-based runtime.
+
 ## Почему не сразу переписывать bot.py
 
 Сначала нужно защитить данные и определить memory contract. Если сразу переписать handlers, но оставить старую модель памяти, главная проблема не исчезнет: бот продолжит превращать mutable summaries в источник истины.

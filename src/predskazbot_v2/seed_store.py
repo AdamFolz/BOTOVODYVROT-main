@@ -61,7 +61,7 @@ class SeedStore:
                         raise SeedStoreError(f"Malformed seed row in {seed_path} on line {line_number}")
                     records_by_entity[entity].append(data)
 
-        return cls(dict(records_by_entity))
+        return cls(_dedupe_records(dict(records_by_entity)))
 
     def chat_by_telegram_id(self, telegram_chat_id: int) -> dict[str, Any] | None:
         return self._chats_by_telegram_id.get(int(telegram_chat_id))
@@ -142,3 +142,47 @@ class SeedStore:
             reverse=True,
         )
         return visible_rows[:limit]
+
+
+def _dedupe_records(records_by_entity: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    key_fields_by_entity = {
+        "chats": ("id",),
+        "members": ("id",),
+        "chat_memberships": ("chat_id", "member_id"),
+        "message_events": ("id",),
+        "memory_observations": ("id",),
+        "memory_claims": ("id",),
+        "claim_evidence": ("id",),
+        "manual_memories_v2": ("id",),
+        "relationship_edges": ("id",),
+        "daily_chronicles": ("id",),
+        "llm_runs": ("id",),
+    }
+    deduped: dict[str, list[dict[str, Any]]] = {}
+    for entity, rows in records_by_entity.items():
+        key_fields = key_fields_by_entity.get(entity)
+        if not key_fields:
+            deduped[entity] = rows
+            continue
+        by_key: dict[tuple[object, ...], dict[str, Any]] = {}
+        passthrough: list[dict[str, Any]] = []
+        for row in rows:
+            key = tuple(row.get(field) for field in key_fields)
+            if any(part is None or part == "" for part in key):
+                passthrough.append(row)
+                continue
+            if entity == "chat_memberships" and key in by_key:
+                by_key[key] = _merge_membership(by_key[key], row)
+            else:
+                by_key[key] = row
+        deduped[entity] = passthrough + list(by_key.values())
+    return deduped
+
+
+def _merge_membership(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(previous)
+    merged.update(current)
+    for field in ("current_username", "current_display_name"):
+        if not current.get(field) and previous.get(field):
+            merged[field] = previous[field]
+    return merged
