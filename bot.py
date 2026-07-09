@@ -32,9 +32,17 @@ logging.basicConfig(
 logger = logging.getLogger("predskazbot")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip()
+# KIMI (Moonshot AI) exposes an OpenAI-compatible API. If MOONSHOT_API_KEY is
+# set, it's used as the primary provider via OPENAI_BASE_URL/OPENAI_MODEL
+# defaults below, without touching the OpenAI-specific env vars.
+MOONSHOT_API_KEY = os.getenv("MOONSHOT_API_KEY", "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip() or MOONSHOT_API_KEY
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip() or (
+    "kimi-k2.7-code" if MOONSHOT_API_KEY else "gpt-4o-mini"
+)
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip() or (
+    "https://api.kimi.com/coding/v1" if MOONSHOT_API_KEY else ""
+)
 DATABASE_PATH = os.getenv("DATABASE_PATH", "predskazbot.sqlite3").strip()
 MAX_RECENT_MESSAGES = int(os.getenv("MAX_RECENT_MESSAGES", "80"))
 MAX_RECENT_BOT_RESPONSES = int(os.getenv("MAX_RECENT_BOT_RESPONSES", "80"))

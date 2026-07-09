@@ -15,5 +15,10 @@ Telegram-бот для конфы: предсказания, досье учас
 - Configuration lives in `.env` (see `.env.example` for all variables). Secrets (`TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`) are stored as Replit Secrets, not in `.env`. `ADMIN_USER_ID` is set as a (non-secret) environment variable since it's just a Telegram numeric ID.
 - To restart after code changes, restart the `PredskazBot` workflow.
 
+## AI provider
+- Default provider is OpenAI (`OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL`).
+- The bot also supports KIMI Code (Moonshot AI) as a drop-in OpenAI-compatible provider: set the `MOONSHOT_API_KEY` secret and, if `OPENAI_API_KEY`/`OPENAI_MODEL`/`OPENAI_BASE_URL` are left blank, `bot.py` automatically uses `https://api.kimi.com/coding/v1` with model `kimi-k2.7-code`.
+- Note: the KIMI Code base URL is `https://api.kimi.com/coding/v1` (product-specific), not the general Moonshot platform URL `https://api.moonshot.ai/v1` — using the wrong one returns 401 Invalid Authentication even with a valid key.
+
 ## Notes
 - All core modules (`database.py`, `knowledge_base.py`, `memory.py`, `prompts.py`, `utils.py`, `models.py`) were already present and complete in the imported project — no rewrites were needed to get it running.
