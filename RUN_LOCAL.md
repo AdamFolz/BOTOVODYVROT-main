@@ -316,3 +316,23 @@ V2_JSONL_BRIDGE_ENABLED=0
 ```
 
 Если всё нормально, бот покажет `storage: sqlite` и количество `chat_message_events` для текущего чата. Это значит, что новые сообщения уже собираются в v2 live storage.
+
+## V2 full transition mode
+
+Если хочешь перевести runtime memory context на v2 и отключить обычный v1 fallback для `/profile`, `/lore`, `/summary` и `/future`, включи:
+
+```env
+V2_FULL_TRANSITION=1
+V1_MEMORY_FALLBACK_ENABLED=0
+```
+
+В этом режиме бот продолжает писать v2 live-данные и не полагается на v1 summaries как на основной memory context. Если v1 SQLite временно падает, входящие сообщения и `/remember` всё равно пытаются сохраниться в v2 log.
+
+## PostgreSQL import для v2 seed/live
+
+Если хочешь загрузить `exports/v2-seed.jsonl` или `exports/v2-live-events.jsonl` в PostgreSQL:
+
+```powershell
+python -m pip install "psycopg[binary]"
+python scripts/import_v2_seed.py --seed exports/v2-seed.jsonl --database-url "postgresql://user:pass@host:5432/dbname"
+```

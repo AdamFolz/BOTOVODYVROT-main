@@ -29,12 +29,16 @@ class MemoryManager:
         self.client = openai_client
         self.model = model
         self.v2_enabled = os.getenv("V2_MEMORY_ENABLED", "1") == "1"
+        self.v2_full_transition = os.getenv("V2_FULL_TRANSITION", "0") == "1"
+        self.v1_memory_fallback_enabled = os.getenv("V1_MEMORY_FALLBACK_ENABLED", "1") == "1"
         self.v2_seed_path = Path(os.getenv("V2_SEED_PATH", "exports/v2-seed.jsonl"))
         self.v2_live_events_path = Path(os.getenv("V2_LIVE_EVENTS_PATH", "exports/v2-live-events.jsonl"))
         self.v2_sqlite_path = Path(os.getenv("V2_SQLITE_PATH", "predskazbot_v2.sqlite3"))
         self.v2_jsonl_bridge_enabled = os.getenv("V2_JSONL_BRIDGE_ENABLED", "0") == "1"
         self.v2_store = SQLiteV2Store(self.v2_sqlite_path) if self.v2_enabled else None
         self.llm_disabled_reason: str | None = None
+        self._seed_cache_key: tuple[tuple[str, int, int], ...] | None = None
+        self._seed_cache_store: SeedStore | None = None
 
     def load_v2_seed_store(self) -> SeedStore | None:
         if not self.v2_enabled:
@@ -43,9 +47,19 @@ class MemoryManager:
             self.v2_store.init()
             return self.v2_store
         paths = [self.v2_seed_path, self.v2_live_events_path]
-        if not any(path.exists() for path in paths):
+        existing_paths = [path for path in paths if path.exists()]
+        if not existing_paths:
             return None
-        return SeedStore.from_jsonl_paths(paths)
+        cache_key = tuple(
+            (str(path.resolve()), int(path.stat().st_mtime_ns), int(path.stat().st_size))
+            for path in existing_paths
+        )
+        if self._seed_cache_key == cache_key and self._seed_cache_store is not None:
+            return self._seed_cache_store
+        store = SeedStore.from_jsonl_paths(existing_paths)
+        self._seed_cache_key = cache_key
+        self._seed_cache_store = store
+        return store
 
     def record_v2_message(
         self,
@@ -58,6 +72,7 @@ class MemoryManager:
         mentions: list[str],
         telegram_message_id: int | None = None,
         telegram_thread_id: int | None = None,
+        reply_to_message_id: int | None = None,
         chat_title: str = "",
         chat_type: str = "telegram",
     ) -> None:
@@ -74,6 +89,7 @@ class MemoryManager:
                 mentions=mentions,
                 telegram_message_id=telegram_message_id,
                 telegram_thread_id=telegram_thread_id,
+                reply_to_message_id=reply_to_message_id,
                 chat_title=chat_title,
                 chat_type=chat_type,
             )
@@ -85,6 +101,9 @@ class MemoryManager:
                 display_name=display_name,
                 text=text,
                 mentions=mentions,
+                telegram_message_id=telegram_message_id,
+                telegram_thread_id=telegram_thread_id,
+                reply_to_message_id=reply_to_message_id,
             )
 
 
@@ -98,6 +117,14 @@ class MemoryManager:
         text: str,
     ) -> None:
         if not self.v2_enabled or not self.v2_store:
+            if self.v2_jsonl_bridge_enabled or self.v2_full_transition:
+                LiveEventLog(self.v2_live_events_path).append_manual_memory(
+                    telegram_chat_id=chat_id,
+                    author_telegram_user_id=author_user_id,
+                    username=username,
+                    display_name=display_name,
+                    text=text,
+                )
             return
         self.v2_store.init()
         self.v2_store.add_manual_memory(
@@ -107,6 +134,14 @@ class MemoryManager:
             display_name=display_name,
             text=text,
         )
+        if self.v2_jsonl_bridge_enabled:
+            LiveEventLog(self.v2_live_events_path).append_manual_memory(
+                telegram_chat_id=chat_id,
+                author_telegram_user_id=author_user_id,
+                username=username,
+                display_name=display_name,
+                text=text,
+            )
 
     def record_v2_bot_response(
         self,
@@ -160,12 +195,13 @@ class MemoryManager:
         return text
 
     def build_context_for_user(self, chat_id: int, user_id: int, max_recent_messages: int = 80) -> str:
-        profile = self.db.get_user_profile(chat_id, user_id)
-        chat_memory = self.db.get_chat_memory(chat_id)
-        recent_messages = self.db.recent_messages(chat_id, max_recent_messages)
-        user_messages = self.db.recent_user_messages(chat_id, user_id, 25)
-        relationships = self.db.recent_relationships_for_user(chat_id, user_id, 20)
-        manual_memories = self.db.recent_manual_memories(chat_id, 10)
+        use_v1 = not self.v2_full_transition or self.v1_memory_fallback_enabled
+        profile = self.db.get_user_profile(chat_id, user_id) if use_v1 else None
+        chat_memory = self.db.get_chat_memory(chat_id) if use_v1 else None
+        recent_messages = self.db.recent_messages(chat_id, max_recent_messages) if use_v1 else []
+        user_messages = self.db.recent_user_messages(chat_id, user_id, 25) if use_v1 else []
+        relationships = self.db.recent_relationships_for_user(chat_id, user_id, 20) if use_v1 else []
+        manual_memories = self.db.recent_manual_memories(chat_id, 10) if use_v1 else []
         recent_bot_responses = self.db.recent_bot_responses(chat_id, 20)
 
         blocks: list[str] = []
@@ -173,8 +209,10 @@ class MemoryManager:
         v2_profile = self.build_v2_profile_text(chat_id, user_id)
         if v2_profile:
             blocks.append("V2 MEMORY CONTEXT:\n" + v2_profile)
+        elif self.v2_full_transition:
+            blocks.append("V2 MEMORY CONTEXT:\nV2-досье пока пустое. Используй только подтверждённый свежий контекст.")
 
-        if profile:
+        if profile and use_v1:
             blocks.append(
                 "ДОСЬЕ УЧАСТНИКА:\n"
                 f"Имя: {profile['display_name']} (@{profile['username']})\n"
@@ -190,10 +228,10 @@ class MemoryManager:
                 f"Ночной режим: {profile['night_mode_behavior']}\n"
                 f"Уверенность наблюдений: {profile['confidence_score']}"
             )
-        else:
+        elif use_v1:
             blocks.append("ДОСЬЕ УЧАСТНИКА: пока почти пустое, используй только свежий контекст.")
 
-        if chat_memory:
+        if chat_memory and use_v1:
             blocks.append(
                 "ПАМЯТЬ КОНФЫ:\n"
                 f"Настроение дня: {chat_memory['mood_today']}\n"
@@ -208,28 +246,28 @@ class MemoryManager:
                 f"Артефакты: {chat_memory['sacred_artifacts']}\n"
                 f"Мифология: {chat_memory['chat_mythology']}"
             )
-        else:
+        elif use_v1:
             blocks.append("ПАМЯТЬ КОНФЫ: пока пустая.")
 
-        if relationships:
+        if relationships and use_v1:
             rel_text = "\n".join(
                 f"- {row['relation_type']}: {row['notes']} (наблюдений: {row['evidence_count']})"
                 for row in relationships
             )
             blocks.append("СВЯЗИ УЧАСТНИКА:\n" + rel_text)
 
-        if manual_memories:
+        if manual_memories and use_v1:
             mem_text = "\n".join(f"- {row['text']}" for row in manual_memories)
             blocks.append("РУЧНАЯ ПАМЯТЬ ОТ КОНФЫ:\n" + mem_text)
 
-        if user_messages:
+        if user_messages and use_v1:
             user_text = "\n".join(
                 f"{row['display_name']}: {row['text']}"
                 for row in user_messages[-15:]
             )
             blocks.append("ПОСЛЕДНИЕ СООБЩЕНИЯ УЧАСТНИКА:\n" + user_text)
 
-        if recent_messages:
+        if recent_messages and use_v1:
             recent_text = "\n".join(
                 f"{row['display_name']}: {row['text']}"
                 for row in recent_messages[-35:]
@@ -243,17 +281,20 @@ class MemoryManager:
         return safe_short("\n\n".join(blocks), 12000)
 
     def build_chat_context(self, chat_id: int, max_recent_messages: int = 100) -> str:
-        chat_memory = self.db.get_chat_memory(chat_id)
-        recent_messages = self.db.recent_messages(chat_id, max_recent_messages)
-        manual_memories = self.db.recent_manual_memories(chat_id, 10)
+        use_v1 = not self.v2_full_transition or self.v1_memory_fallback_enabled
+        chat_memory = self.db.get_chat_memory(chat_id) if use_v1 else None
+        recent_messages = self.db.recent_messages(chat_id, max_recent_messages) if use_v1 else []
+        manual_memories = self.db.recent_manual_memories(chat_id, 10) if use_v1 else []
 
         blocks: list[str] = []
 
         v2_lore = self.build_v2_lore_text(chat_id)
         if v2_lore:
             blocks.append("V2 MEMORY CONTEXT:\n" + v2_lore)
+        elif self.v2_full_transition:
+            blocks.append("V2 MEMORY CONTEXT:\nV2-лора для этого чата пока нет.")
 
-        if chat_memory:
+        if chat_memory and use_v1:
             blocks.append(
                 "ПАМЯТЬ КОНФЫ:\n"
                 f"Настроение дня: {chat_memory['mood_today']}\n"
@@ -269,10 +310,10 @@ class MemoryManager:
                 f"Мифология: {chat_memory['chat_mythology']}"
             )
 
-        if manual_memories:
+        if manual_memories and use_v1:
             blocks.append("РУЧНАЯ ПАМЯТЬ:\n" + "\n".join(f"- {row['text']}" for row in manual_memories))
 
-        if recent_messages:
+        if recent_messages and use_v1:
             blocks.append(
                 "ПОСЛЕДНИЕ СООБЩЕНИЯ:\n"
                 + "\n".join(f"{row['display_name']}: {row['text']}" for row in recent_messages[-50:])
@@ -281,6 +322,8 @@ class MemoryManager:
         return safe_short("\n\n".join(blocks), 12000)
 
     async def maybe_update_memory(self, chat_id: int) -> None:
+        if self.v2_full_transition:
+            return
         if self.llm_disabled_reason:
             return
 

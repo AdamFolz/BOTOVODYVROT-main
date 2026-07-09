@@ -131,6 +131,16 @@ class Database:
                     value TEXT NOT NULL,
                     PRIMARY KEY (chat_id, key)
                 );
+
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    actor_user_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    target_user_id INTEGER,
+                    details_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
                 '''
             )
 
@@ -415,3 +425,108 @@ class Database:
                 (chat_id,),
             ).fetchone()
         return int(row["c"])
+
+    def count_users(self, chat_id: int) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                'SELECT COUNT(*) AS c FROM users WHERE chat_id = ?',
+                (chat_id,),
+            ).fetchone()
+        return int(row["c"])
+
+    def count_manual_memories(self, chat_id: int) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                'SELECT COUNT(*) AS c FROM manual_memories WHERE chat_id = ?',
+                (chat_id,),
+            ).fetchone()
+        return int(row["c"])
+
+    def add_audit_log(
+        self,
+        chat_id: int,
+        actor_user_id: int,
+        action: str,
+        target_user_id: int | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                '''
+                INSERT INTO audit_log(chat_id, actor_user_id, action, target_user_id, details_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    chat_id,
+                    actor_user_id,
+                    action,
+                    target_user_id,
+                    json.dumps(details or {}, ensure_ascii=False),
+                    utc_now(),
+                ),
+            )
+
+    def export_user_data(self, chat_id: int, user_id: int) -> dict[str, Any]:
+        with self.connect() as conn:
+            user = conn.execute(
+                'SELECT * FROM users WHERE chat_id = ? AND user_id = ?',
+                (chat_id, user_id),
+            ).fetchone()
+            messages = conn.execute(
+                'SELECT * FROM raw_messages WHERE chat_id = ? AND user_id = ? ORDER BY id ASC',
+                (chat_id, user_id),
+            ).fetchall()
+            profile = conn.execute(
+                'SELECT * FROM user_profiles WHERE chat_id = ? AND user_id = ?',
+                (chat_id, user_id),
+            ).fetchone()
+            relationships = conn.execute(
+                '''
+                SELECT * FROM relationships
+                WHERE chat_id = ? AND (user_a_id = ? OR user_b_id = ?)
+                ORDER BY updated_at ASC
+                ''',
+                (chat_id, user_id, user_id),
+            ).fetchall()
+            manual_memories = conn.execute(
+                'SELECT * FROM manual_memories WHERE chat_id = ? AND author_user_id = ? ORDER BY id ASC',
+                (chat_id, user_id),
+            ).fetchall()
+            bot_responses = conn.execute(
+                'SELECT * FROM bot_responses WHERE chat_id = ? AND user_id = ? ORDER BY id ASC',
+                (chat_id, user_id),
+            ).fetchall()
+
+        return {
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "user": dict(user) if user else None,
+            "messages": [dict(row) for row in messages],
+            "profile": dict(profile) if profile else None,
+            "relationships": [dict(row) for row in relationships],
+            "manual_memories": [dict(row) for row in manual_memories],
+            "bot_responses": [dict(row) for row in bot_responses],
+        }
+
+    def delete_user_data(self, chat_id: int, user_id: int) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        with self.connect() as conn:
+            for table, where_sql, params in [
+                ("raw_messages", "chat_id = ? AND user_id = ?", (chat_id, user_id)),
+                ("user_profiles", "chat_id = ? AND user_id = ?", (chat_id, user_id)),
+                ("relationships", "chat_id = ? AND (user_a_id = ? OR user_b_id = ?)", (chat_id, user_id, user_id)),
+                ("manual_memories", "chat_id = ? AND author_user_id = ?", (chat_id, user_id)),
+                ("bot_responses", "chat_id = ? AND user_id = ?", (chat_id, user_id)),
+                ("users", "chat_id = ? AND user_id = ?", (chat_id, user_id)),
+            ]:
+                cur = conn.execute(f"DELETE FROM {table} WHERE {where_sql}", params)
+                counts[table] = int(cur.rowcount if cur.rowcount is not None else 0)
+        return counts
+
+    def forget_manual_memory(self, chat_id: int, memory_id: int) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute(
+                'DELETE FROM manual_memories WHERE chat_id = ? AND id = ?',
+                (chat_id, memory_id),
+            )
+        return bool(cur.rowcount)
