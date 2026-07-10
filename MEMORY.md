@@ -1,0 +1,39 @@
+# Telegram bot token from @BotFather
+TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN_HERE
+
+# OpenAI-compatible API key (currently used for vip.j3gb.com)
+OPENAI_API_KEY=YOUR_OPENAI_API_KEY_HERE
+
+# Model and provider overrides (current production config)
+OPENAI_MODEL=gpt-5.5
+OPENAI_BASE_URL=https://vip.j3gb.com/v1
+
+# Optional: use KIMI Code (Moonshot AI) instead of OpenAI. If set and
+# OPENAI_API_KEY/OPENAI_MODEL/OPENAI_BASE_URL are left blank, the bot
+# automatically uses KIMI's OpenAI-compatible endpoint with kimi-k2.7-code.
+MOONSHOT_API_KEY=
+
+# Local SQLite database path
+DATABASE_PATH=predskazbot.sqlite3
+
+# Optional admin Telegram user id. Enables /remember, /forget, /v2status,
+# /kbimport. If left as 0 (or unset), the bot still starts, but these
+# admin-only commands reply that they aren't configured.
+ADMIN_USER_ID=0
+
+# Optional comma-separated Telegram chat allowlist. Empty means all chats.
+ALLOWED_CHAT_IDS=
+
+# v2 local memory settings
+V2_MEMORY_ENABLED=1
+V2_SEED_PATH=exports/v2-seed.jsonl
+V2_LIVE_EVENTS_PATH=exports/v2-live-events.jsonl
+V2_SQLITE_PATH=predskazbot_v2.sqlite3
+V2_JSONL_BRIDGE_ENABLED=0
+V2_FULL_TRANSITION=0
+V1_MEMORY_FALLBACK_ENABLED=1
+
+# Local knowledge base integration
+KNOWLEDGE_BASE_DIR=AI_Knowledge_Base
+KB_SEARCH_LIMIT=5
+ASK_COOLDOWN_SECONDS=15

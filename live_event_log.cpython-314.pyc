@@ -1,0 +1,19 @@
+[Unit]
+Description=PredskazBot Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=predskazbot
+WorkingDirectory=/opt/predskazbot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/predskazbot/.venv/bin/python /opt/predskazbot/bot.py
+Restart=always
+RestartSec=5
+# Protect system
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

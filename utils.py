@@ -1,81 +1,57 @@
-import re
-from difflib import SequenceMatcher
-from typing import Iterable
+# PredskazBot v2.1 – unified provider config
+# ==================================================
+# Telegram
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
 
+# --- CHOOSE ONE LLM PROVIDER ---
+# 1) OpenAI (официальный)
+#OPENAI_API_KEY=sk-...
+#OPENAI_MODEL=gpt-4o-mini
+#OPENAI_BASE_URL=
 
-_WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9_@#]+")
+# 2) OpenAI-compatible прокси (vip.j3gb.com, bizdecipher и т.п.)
+OPENAI_API_KEY=sk-proxy-key-here
+OPENAI_BASE_URL=https://vip.j3gb.com/v1
+OPENAI_MODEL=gpt-4o-mini
 
+# 3) Venice.ai
+#VENICE_API_KEY=...
+#OPENAI_BASE_URL=https://api.venice.ai/api/v1
+#OPENAI_MODEL=qwen3-4b
+#  или: venice-uncensored, llama-3.3-70b, deepseek-r1-671b, ...
 
-def normalize_text(text: str) -> str:
-    lowered = text.lower().replace("ё", "е")
-    lowered = re.sub(r"https?://\S+", " ", lowered)
-    lowered = re.sub(r"[^a-zа-я0-9_@#\s-]", " ", lowered)
-    lowered = re.sub(r"\s+", " ", lowered).strip()
-    return lowered
+# 4) KIMI / Moonshot
+#MOONSHOT_API_KEY=...
+#  KIMI Code product:
+#OPENAI_BASE_URL=https://api.kimi.com/coding/v1
+#OPENAI_MODEL=kimi-k2.7-code
+#  Moonshot general:
+#OPENAI_BASE_URL=https://api.moonshot.ai/v1
+#OPENAI_MODEL=moonshot-v1-8k
 
+# 5) OpenRouter
+#OPENROUTER_API_KEY=...
+#OPENAI_BASE_URL=https://openrouter.ai/api/v1
+#OPENAI_MODEL=openai/gpt-4o-mini
 
-def words(text: str) -> list[str]:
-    return _WORD_RE.findall(normalize_text(text))
+# 6) DeepSeek / Groq
+#DEEPSEEK_API_KEY=...
+#GROQ_API_KEY=...
 
+# --- Telegram admin ---
+ADMIN_USER_ID=0
+ALLOWED_CHAT_IDS=
 
-def jaccard_similarity(a: str, b: str) -> float:
-    set_a = set(words(a))
-    set_b = set(words(b))
-    if not set_a and not set_b:
-        return 1.0
-    if not set_a or not set_b:
-        return 0.0
-    return len(set_a & set_b) / len(set_a | set_b)
+# --- storage ---
+DATABASE_PATH=predskazbot.sqlite3
+V2_MEMORY_ENABLED=1
+V2_SQLITE_PATH=predskazbot_v2.sqlite3
+V2_FULL_TRANSITION=0
+V1_MEMORY_FALLBACK_ENABLED=1
 
-
-def sequence_similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, normalize_text(a), normalize_text(b)).ratio()
-
-
-def first_words_signature(text: str, count: int = 6) -> str:
-    return " ".join(words(text)[:count])
-
-
-def extract_mentions(text: str) -> list[str]:
-    return sorted(set(re.findall(r"@[A-Za-z0-9_]{3,32}", text)))
-
-
-def is_too_similar(candidate: str, previous_texts: Iterable[str]) -> tuple[bool, str]:
-    candidate_signature = first_words_signature(candidate)
-    for old in previous_texts:
-        if not old:
-            continue
-
-        old_signature = first_words_signature(old)
-        if candidate_signature and old_signature and candidate_signature == old_signature:
-            return True, "совпадает начало ответа"
-
-        seq = sequence_similarity(candidate, old)
-        jac = jaccard_similarity(candidate, old)
-
-        if seq >= 0.72:
-            return True, f"слишком похожая формулировка ({seq:.2f})"
-
-        if jac >= 0.55:
-            return True, f"слишком похожий набор слов ({jac:.2f})"
-
-    return False, ""
-
-
-def clamp_int(value: int, minimum: int, maximum: int) -> int:
-    return max(minimum, min(maximum, value))
-
-
-def safe_short(text: str, max_len: int = 3500) -> str:
-    text = text.strip()
-    if len(text) <= max_len:
-        return text
-    return text[:max_len].rsplit(" ", 1)[0] + "…"
-
-
-def clean_bot_reply(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"^```(?:\w+)?", "", text)
-    text = re.sub(r"```$", "", text)
-    text = text.strip().strip('"').strip()
-    return text
+# --- KB ---
+KNOWLEDGE_BASE_DIR=AI_Knowledge_Base
+KB_SEARCH_LIMIT=5
+ASK_COOLDOWN_SECONDS=15
+FUTURE_COOLDOWN_SECONDS=20
+SUMMARY_COOLDOWN_SECONDS=60
