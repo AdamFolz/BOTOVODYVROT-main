@@ -1,154 +1,188 @@
-CORE_STYLE_SYSTEM = """Ты PredskazBot v1 — токсично-добрый пророк из старой Telegram-конфы.
+from __future__ import annotations
 
-Твоя задача:
-- писать коротко, смешно, живо и персонально;
-- использовать память конфы;
-- не быть рандомным генератором ереси;
-- не выдумывать жёсткие факты, которых нет в памяти;
-- превращать наблюдения в локальные шутки;
-- звучать как бот, которого конфа постепенно воспитала.
-
-Правила безопасности и вкуса:
-- Не шути про реальные болезни, смерть, травмы, инвалидность.
-- Не атакуй национальность, религию, ориентацию, семью, внешность.
-- Не утверждай обвинения как факты.
-- Не используй персональные данные вне чата.
-- Не переходи в реальную травлю.
-- Разрешён лёгкий конфовый подъёб, сарказм, мемность, самоирония.
-- Если контекста мало, шути мягко и обтекаемо.
-
-Главное правило памяти:
-Сырые сообщения — факты.
-Профили — вероятностные наблюдения.
-Мемы — локальные ассоциации.
-
-Не пиши: “Миша идиот”.
-Пиши: “в конфе уже сложилась легенда, что Миша появляется внезапно, роняет фразу и исчезает”.
-"""
+import json
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
 
 
-FUTURE_PROMPT = """Сгенерируй одно короткое предсказание для участника Telegram-конфы.
-
-Формат:
-- 1–3 предложения.
-- Можно язвительно, но смешно и без грязи.
-- Используй свежий контекст, досье пользователя и лор конфы.
-- Не повторяй старые ответы.
-- Не начинай шаблонно словами “Сегодня”, “Завтра”, “Тебя ждёт”, если это уже было в недавних ответах.
-- Желательно использовать 0–1 локальный мем, не больше.
-- Ответ должен быть готовым текстом для отправки в чат.
-
-Контекст:
-{context}
-"""
+class SeedStoreError(RuntimeError):
+    """Raised when a v2 seed file cannot be read."""
 
 
-SUMMARY_PROMPT = """Сделай короткую летопись последних событий чата.
+class SeedStore:
+    """Read-only in-memory view over v2 seed JSONL.
 
-Формат:
-- 3–7 пунктов
-- мемно, но понятно
-- без жёсткой травли
-- выдели главную тему, настроение и локальные приколы
+    This is not the production storage layer. It is a local bridge that lets us
+    test v2 retrieval semantics before PostgreSQL repositories are wired in.
+    """
 
-Контекст:
-{context}
-"""
+    def __init__(self, records_by_entity: dict[str, list[dict[str, Any]]]) -> None:
+        self.records_by_entity = records_by_entity
+        self._chats_by_telegram_id = {
+            int(row["telegram_chat_id"]): row
+            for row in self.records_by_entity.get("chats", [])
+        }
+        self._members_by_telegram_id = {
+            int(row["telegram_user_id"]): row
+            for row in self.records_by_entity.get("members", [])
+        }
+
+    @classmethod
+    def from_jsonl(cls, path: str | Path) -> "SeedStore":
+        return cls.from_jsonl_paths([path])
+
+    @classmethod
+    def from_jsonl_paths(cls, paths: list[str | Path]) -> "SeedStore":
+        records_by_entity: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        existing_paths = [Path(path) for path in paths if Path(path).exists()]
+        if not existing_paths:
+            raise SeedStoreError("no v2 seed/live JSONL files exist")
+
+        for seed_path in existing_paths:
+            with seed_path.open("r", encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        record = json.loads(stripped)
+                    except json.JSONDecodeError as exc:
+                        raise SeedStoreError(f"Invalid JSON in {seed_path} on line {line_number}: {exc}") from exc
+
+                    if record.get("record_type") == "v2_seed_metadata":
+                        continue
+                    if record.get("record_type") != "v2_seed_row":
+                        raise SeedStoreError(f"Unsupported seed record in {seed_path} on line {line_number}")
+
+                    entity = str(record.get("entity", ""))
+                    data = record.get("data")
+                    if not entity or not isinstance(data, dict):
+                        raise SeedStoreError(f"Malformed seed row in {seed_path} on line {line_number}")
+                    records_by_entity[entity].append(data)
+
+        return cls(_dedupe_records(dict(records_by_entity)))
+
+    def chat_by_telegram_id(self, telegram_chat_id: int) -> dict[str, Any] | None:
+        return self._chats_by_telegram_id.get(int(telegram_chat_id))
+
+    def member_by_telegram_id(self, telegram_user_id: int) -> dict[str, Any] | None:
+        return self._members_by_telegram_id.get(int(telegram_user_id))
+
+    def membership(self, chat_id: str, member_id: str) -> dict[str, Any] | None:
+        for row in self.records_by_entity.get("chat_memberships", []):
+            if row.get("chat_id") == chat_id and row.get("member_id") == member_id:
+                return row
+        return None
+
+    def message_events_for_chat(self, chat_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        rows = [
+            row for row in self.records_by_entity.get("message_events", [])
+            if row.get("chat_id") == chat_id
+        ]
+        rows.sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
+        return rows[:limit]
+
+    def manual_memories_for_chat(self, chat_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        rows = [
+            row for row in self.records_by_entity.get("manual_memories_v2", [])
+            if row.get("chat_id") == chat_id
+        ]
+        rows.sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
+        return rows[:limit]
+
+    def claims_for_chat(self, chat_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        return self._rank_claims(
+            [
+                row for row in self.records_by_entity.get("memory_claims", [])
+                if row.get("chat_id") == chat_id and row.get("subject_type") == "chat"
+            ],
+            limit,
+        )
+
+    def claims_for_member(self, chat_id: str, member_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        return self._rank_claims(
+            [
+                row for row in self.records_by_entity.get("memory_claims", [])
+                if row.get("chat_id") == chat_id and member_id in row.get("subject_ids", [])
+            ],
+            limit,
+        )
+
+    def relationship_edges_for_member(self, chat_id: str, member_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        rows = [
+            row for row in self.records_by_entity.get("relationship_edges", [])
+            if row.get("chat_id") == chat_id
+            and member_id in {row.get("member_a_id"), row.get("member_b_id")}
+        ]
+        rows.sort(
+            key=lambda row: (
+                float(row.get("decayed_weight") or 0),
+                int(row.get("evidence_count") or 0),
+                str(row.get("updated_at", "")),
+            ),
+            reverse=True,
+        )
+        return rows[:limit]
+
+    def display_name_for_member(self, chat_id: str, member_id: str) -> str:
+        membership = self.membership(chat_id, member_id)
+        if not membership:
+            return member_id
+        return membership.get("current_display_name") or membership.get("current_username") or member_id
+
+    def _rank_claims(self, rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        visible_rows = [row for row in rows if row.get("visibility", "normal") == "normal"]
+        visible_rows.sort(
+            key=lambda row: (
+                float(row.get("decayed_weight") or 0),
+                float(row.get("confidence") or 0),
+                str(row.get("updated_at", "")),
+            ),
+            reverse=True,
+        )
+        return visible_rows[:limit]
 
 
-ASK_PROMPT = """Ответь пользователю как полезный Telegram-бот для этого чата.
-
-Правила:
-- Соедини живой контекст чата и локальную базу знаний.
-- Не выдумывай факты, которых нет ни в чате, ни в базе.
-- Если опираешься на базу знаний, в конце дай короткий блок `Источники:` с относительными путями.
-- Если в базе нет подтверждения, но можешь помочь по контексту чата, так и скажи.
-- Ответ должен быть коротким, понятным и готовым для отправки в чат.
-
-Вопрос:
-{question}
-
-Контекст чата:
-{chat_context}
-
-Knowledge Base Context:
-{kb_context}
-"""
-
-
-KB_ANSWER_PROMPT = """Ответь на вопрос пользователя только по локальной базе знаний.
-
-Правила:
-- Используй только факты из блока Knowledge Base Context.
-- Если подтверждения нет, прямо скажи: "В локальной базе нет подтверждения по этому вопросу."
-- Отвечай кратко и по делу.
-- В конце дай блок `Источники:` и перечисли относительные пути файлов, на которые ты опирался.
-- Не выдумывай деталей сверх контекста.
-
-Вопрос:
-{question}
-
-Knowledge Base Context:
-{context}
-"""
+def _dedupe_records(records_by_entity: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    key_fields_by_entity = {
+        "chats": ("id",),
+        "members": ("id",),
+        "chat_memberships": ("chat_id", "member_id"),
+        "message_events": ("id",),
+        "memory_observations": ("id",),
+        "memory_claims": ("id",),
+        "claim_evidence": ("id",),
+        "manual_memories_v2": ("id",),
+        "relationship_edges": ("id",),
+        "daily_chronicles": ("id",),
+        "llm_runs": ("id",),
+    }
+    deduped: dict[str, list[dict[str, Any]]] = {}
+    for entity, rows in records_by_entity.items():
+        key_fields = key_fields_by_entity.get(entity)
+        if not key_fields:
+            deduped[entity] = rows
+            continue
+        by_key: dict[tuple[object, ...], dict[str, Any]] = {}
+        passthrough: list[dict[str, Any]] = []
+        for row in rows:
+            key = tuple(row.get(field) for field in key_fields)
+            if any(part is None or part == "" for part in key):
+                passthrough.append(row)
+                continue
+            if entity == "chat_memberships" and key in by_key:
+                by_key[key] = _merge_membership(by_key[key], row)
+            else:
+                by_key[key] = row
+        deduped[entity] = passthrough + list(by_key.values())
+    return deduped
 
 
-MEMORY_CURATOR_PROMPT = """Ты Memory Curator для Telegram-конфы.
-
-Проанализируй новые сообщения и обнови память.
-Верни строго JSON без markdown.
-
-Схема:
-{{
-  "chat_memory": {{
-    "mood_today": "короткое описание настроения",
-    "chaos_level": 1,
-    "main_topic_today": "главная тема",
-    "main_clown_today": "кто сегодня главный персонаж, если понятно",
-    "meme_of_the_day": "мем дня",
-    "weekly_memes": "мемы недели списком через ;",
-    "recent_drama": "недавние срачи или напряжения, аккуратно",
-    "popular_topics": "популярные темы через ;",
-    "local_phrases": "локальные фразы через ;",
-    "sacred_artifacts": "священные артефакты чата через ;",
-    "chat_mythology": "краткая мифология чата"
-  }},
-  "user_profiles": [
-    {{
-      "user_id": 123,
-      "username": "username",
-      "display_name": "Имя",
-      "style_summary": "как пишет",
-      "frequent_topics": "темы через ;",
-      "mentioned_users": "кого часто упоминает через ;",
-      "relationship_notes": "с кем взаимодействует и как",
-      "personal_memes": "мемы про него через ;",
-      "soft_labels": "2-5 мягких ярлыков через ;",
-      "energy_level": 3,
-      "toxicity_style": "нет/мягкий сарказм/душнит/провоцирует/иное",
-      "meme_score": 3,
-      "night_mode_behavior": "меняется ли ночью",
-      "confidence_score": 0.4
-    }}
-  ],
-  "relationships": [
-    {{
-      "user_a_id": 1,
-      "user_b_id": 2,
-      "relation_type": "часто спорят/шутят/пингуют/поддерживают",
-      "notes": "краткое наблюдение",
-      "evidence_count": 1
-    }}
-  ]
-}}
-
-Правила:
-- Не делай категоричных выводов.
-- Не храни оскорбления как истину.
-- Формулируй как “в конфе шутят”, “похоже”, “часто выглядит так”.
-- Если данных мало, confidence_score ставь низким.
-- energy_level, meme_score, chaos_level от 1 до 5.
-
-Новые сообщения:
-{messages}
-"""
+def _merge_membership(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(previous)
+    merged.update(current)
+    for field in ("current_username", "current_display_name"):
+        if not current.get(field) and previous.get(field):
+            merged[field] = previous[field]
+    return merged
